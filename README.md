@@ -1,6 +1,6 @@
 # Discounts Calculator
 
-![Java](https://img.shields.io/badge/Java-19-brightgreen)
+![Java](https://img.shields.io/badge/Java-21-brightgreen)
 
 ## Table of Contents
 
