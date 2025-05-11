@@ -26,15 +26,15 @@ public class PaymentMethod {
         return limit;
     }
 
-    void setId(String id) {
+    public void setId(String id) {
         this.id = id;
     }
 
-    void setDiscount(int discount) {
+    public void setDiscount(int discount) {
         this.discount = discount;
     }
 
-    void setLimit(double limit) {
+    public void setLimit(double limit) {
         this.limit = limit;
     }
 
