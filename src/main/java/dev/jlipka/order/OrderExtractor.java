@@ -32,9 +32,9 @@ class OrderExtractor {
 
             return validatedOrders;
         } catch (JsonProcessingException e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException("Error processing JSON in file: " + ordersPath, e);
         } catch (IOException e) {
-            throw new FileNotFoundException(ordersPath);
+            throw new RuntimeException("I/O error while reading file: " + ordersPath, e);
         }
     }
 }
