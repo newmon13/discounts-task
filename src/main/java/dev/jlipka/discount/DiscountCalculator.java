@@ -11,7 +11,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -27,15 +26,20 @@ public class DiscountCalculator {
 
     private final PaymentMethodFacade paymentMethodFacade;
 
-    private Map<String, PaymentMethod> paymentMethods;
+    private final Map<String, PaymentMethod> paymentMethods;
 
-    private Map<String, Double> paymentMethodsUsage;
+    private final Map<String, Double> paymentMethodsUsage;
+
+    private boolean preferPartialPointsOverCards;
+
 
     public DiscountCalculator(String ordersPath, String paymentMethodsPath) {
         this.ordersPath = ordersPath;
         this.paymentMethodsPath = paymentMethodsPath;
         this.orderFacade = OrderFacade.createDefault();
         this.paymentMethodFacade = PaymentMethodFacade.createDefault();
+        this.paymentMethodsUsage = new HashMap<>();
+        this.paymentMethods = new HashMap<>();
         Logger.getLogger("org.hibernate.validator")
                 .setLevel(Level.WARNING);
     }
@@ -47,87 +51,111 @@ public class DiscountCalculator {
         }
 
         DiscountCalculator discountCalculator = new DiscountCalculator(args[0], args[1]);
-        Map<String, Double> result1 = discountCalculator.calculate(true);
-        Map<String, Double> result2 = discountCalculator.calculate(false);
+        Map<String, Double> bestSolution = discountCalculator.findBestSolution();
 
-        Optional<Double> reduce1 = result1.values()
-                .stream()
-                .reduce(Double::sum);
-
-        Optional<Double> reduce2 = result2.values()
-                .stream()
-                .reduce(Double::sum);
-
-        Set<Map.Entry<String, Double>> betterSolution;
-        if (reduce1.get() < reduce2.get()) {
-            betterSolution = result1.entrySet();
-        } else {
-            betterSolution = result2.entrySet();
-        }
-
-        for (Map.Entry<String, Double> entry : betterSolution) {
+        for (Map.Entry<String, Double> entry : bestSolution.entrySet()) {
             if (entry.getValue() > 0) {
                 System.out.println(entry.getKey() + " " + String.format("%.2f", entry.getValue()));
             }
         }
     }
 
-    public Map<String, Double> calculate(boolean preferCardsOverPartialPoints) {
-        paymentMethodsUsage = new HashMap<>();
+    public Map<String, Double> findBestSolution() {
+
+        this.preferPartialPointsOverCards = false;
+        Map<String, Double> result1 = calculate();
+
+        this.preferPartialPointsOverCards = true;
+        Map<String, Double> result2 = calculate();
+
+        Optional<Double> sum1 = result1.values()
+                .stream()
+                .reduce(Double::sum);
+
+        Optional<Double> sum2 = result2.values()
+                .stream()
+                .reduce(Double::sum);
+
+        if (sum1.isPresent() && sum2.isPresent()) {
+            return sum1.get() < sum2.get() ? result1 : result2;
+        }
+
+        return result1;
+    }
+
+    public Map<String, Double> calculate() {
         List<Order> orders = orderFacade.loadOrders(ordersPath);
         orders.sort(Comparator.comparing(Order::getValue, Comparator.reverseOrder()));
-        this.paymentMethods = new HashMap<>();
+
         for (PaymentMethod paymentMethod : paymentMethodFacade.loadPromotions(paymentMethodsPath)) {
             paymentMethods.put(paymentMethod.getId(), paymentMethod);
             paymentMethodsUsage.put(paymentMethod.getId(), 0.0);
         }
 
         for (Order order : orders) {
-            processOrderOptimally(order, preferCardsOverPartialPoints);
+            processOrderOptimally(order);
         }
 
         return paymentMethodsUsage;
     }
 
-    private void processOrderOptimally(Order order, boolean preferCardsOverPartialPoints) {
-        List<DiscountOption> cardPaymentMethods = findCardPaymentMethods(order);
-        Optional<DiscountOption> fullPointsPaymentOption = getFullPointsPaymentOption(order);
-        Optional<DiscountOption> partialPointsPaymentOption = getPartialPointsPaymentOption(order);
-
-        List<DiscountOption> discountOptions = new ArrayList<>(cardPaymentMethods);
-        fullPointsPaymentOption.ifPresent(discountOptions::add);
-        partialPointsPaymentOption.ifPresent(discountOptions::add);
+    private void processOrderOptimally(Order order) {
+        List<DiscountOption> discountOptions = collectDiscountOptions(order);
 
         if (discountOptions.isEmpty()) {
             handleNoDiscountPayment(order);
         } else {
-            discountOptions.sort(Comparator.comparing(DiscountOption::discountAmount)
-                    .reversed());
-            DiscountOption bestOption = discountOptions.getFirst();
-            if (bestOption.type() == DiscountType.FULL_CARD) {
-                Optional<DiscountOption> fullPointsOption = discountOptions.stream()
-                        .filter(option -> option.type() == DiscountType.FULL_POINTS)
-                        .findFirst();
-
-                if (fullPointsOption.isPresent() && fullPointsOption.get()
-                        .discountAmount() == bestOption.discountAmount()) {
-                    bestOption = fullPointsOption.get();
-                }
-            }
-
-            if (preferCardsOverPartialPoints && bestOption.type() == DiscountType.PARTIAL_POINTS) {
-                Optional<DiscountOption> bestCard = discountOptions.stream()
-                        .filter(discountOption -> discountOption.type() == DiscountType.FULL_CARD)
-                        .max(Comparator.comparing(DiscountOption::discountAmount));
-                if (bestCard.isPresent()) {
-                    bestOption = bestCard.get();
-                }
-            }
-
+            DiscountOption bestOption = findBestDiscountOption(discountOptions);
             applyPaymentOption(bestOption);
         }
     }
 
+    private List<DiscountOption> collectDiscountOptions(Order order) {
+        List<DiscountOption> options = new ArrayList<>(findCardPaymentMethods(order));
+
+        getFullPointsPaymentOption(order).ifPresent(options::add);
+        getPartialPointsPaymentOption(order).ifPresent(options::add);
+
+        return options;
+    }
+
+    private DiscountOption findBestDiscountOption(List<DiscountOption> discountOptions) {
+        discountOptions.sort(Comparator.comparing(DiscountOption::discountAmount)
+                .reversed());
+
+        DiscountOption bestOption = discountOptions.getFirst();
+        bestOption = checkAndPreferFullPointsOption(discountOptions, bestOption);
+        bestOption = applyPartialPointsStrategy(discountOptions, bestOption);
+
+        return bestOption;
+    }
+
+    private DiscountOption checkAndPreferFullPointsOption(List<DiscountOption> options, DiscountOption currentBest) {
+        if (currentBest.type() == DiscountType.FULL_CARD) {
+            Optional<DiscountOption> fullPointsOption = options.stream()
+                    .filter(option -> option.type() == DiscountType.FULL_POINTS)
+                    .findFirst();
+
+            if (fullPointsOption.isPresent() && fullPointsOption.get()
+                    .discountAmount() == currentBest.discountAmount()) {
+                return fullPointsOption.get();
+            }
+        }
+        return currentBest;
+    }
+
+    private DiscountOption applyPartialPointsStrategy(List<DiscountOption> options, DiscountOption currentBest) {
+        if (!preferPartialPointsOverCards && currentBest.type() == DiscountType.PARTIAL_POINTS) {
+            Optional<DiscountOption> bestCard = options.stream()
+                    .filter(option -> option.type() == DiscountType.FULL_CARD)
+                    .max(Comparator.comparing(DiscountOption::discountAmount));
+
+            if (bestCard.isPresent()) {
+                return bestCard.get();
+            }
+        }
+        return currentBest;
+    }
 
     private List<DiscountOption> findCardPaymentMethods(Order order) {
         List<DiscountOption> cardDiscountOptions = new ArrayList<>();
@@ -202,15 +230,7 @@ public class DiscountCalculator {
                 double amountToPay = Math.min(method.getLimit(), orderValue);
                 updatePaymentMethodLimit(method.getId(), amountToPay);
                 orderValue -= amountToPay;
-
-                if (orderValue <= 0) {
-                    break;
-                }
             }
-        }
-
-        if (orderValue > 0) {
-            LOGGER.warning("Nie można opłacić zamówienia: " + order.getId() + ", brakuje: " + orderValue);
         }
     }
 
