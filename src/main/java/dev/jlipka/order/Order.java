@@ -27,7 +27,7 @@ public class Order {
         return value;
     }
 
-    void setValue(double value) {
+    public void setValue(double value) {
         this.value = value;
     }
 
@@ -35,7 +35,7 @@ public class Order {
         return promotions;
     }
 
-    void setPromotions(List<String> promotions) {
+    public void setPromotions(List<String> promotions) {
         this.promotions = promotions;
     }
 
