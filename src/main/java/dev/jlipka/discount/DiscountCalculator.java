@@ -45,7 +45,7 @@ public class DiscountCalculator {
     }
 
     public static void main(String[] args) {
-        if (args.length < 2) {
+        if (args.length != 2) {
             System.out.println("Usage: java -jar app.jar <orders_path> <payment_methods_path>");
             return;
         }
@@ -83,7 +83,7 @@ public class DiscountCalculator {
         return result1;
     }
 
-    public Map<String, Double> calculate() {
+    private Map<String, Double> calculate() {
         List<Order> orders = orderFacade.loadOrders(ordersPath);
         orders.sort(Comparator.comparing(Order::getValue, Comparator.reverseOrder()));
 
@@ -92,8 +92,10 @@ public class DiscountCalculator {
             paymentMethodsUsage.put(paymentMethod.getId(), 0.0);
         }
 
-        for (Order order : orders) {
-            processOrderOptimally(order);
+        if (!paymentMethods.isEmpty()) {
+            for (Order order : orders) {
+                processOrderOptimally(order);
+            }
         }
 
         return paymentMethodsUsage;
